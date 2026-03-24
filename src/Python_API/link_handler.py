@@ -202,12 +202,12 @@ def download_music(url,db,playlist_start=0,playlist_end=10,enable_playlist=False
         else:
             download_list.append((title_info["url"], title_info["title"], entry_name))
             
+    failed_or_missing = []
     if download_list:
         results = asyncio.run(download_all(
             download_list, limit=20
         ))
         saved = 0
-        failed_or_missing = []
         
         for (url, title, entry_name), ok in zip(download_list, results):
             # Check if file was actually successfully saved to the disk
@@ -237,7 +237,15 @@ def download_music(url,db,playlist_start=0,playlist_end=10,enable_playlist=False
             print("All downloads failed")
     else:
         print("No new music to download")
-    return titles
+        
+    valid_entry_names = []
+    for title_info, track_info in zip(titles, entries_to_iter):
+        uploader = track_info.get("uploader") or track_info.get("channel") or "Unknown"
+        entry_name = f"{title_info['title']} - {uploader}"
+        if entry_name not in failed_or_missing:
+            valid_entry_names.append(entry_name)
+            
+    return valid_entry_names
 
 def remove_playlist(db,playlist_name):
     if "playlist" not in db:
