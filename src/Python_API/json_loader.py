@@ -5,7 +5,7 @@ def load_db():
         with open("db.json", "r") as f:
             return json.load(f)
     except FileNotFoundError:
-        db = {"music": [], "playlist": None}
+        db = {"music": [], "playlist": {}}
         save_db(db)
         return db
 

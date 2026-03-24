@@ -3,3 +3,6 @@ music
 src/Python_API/__pycache__
 info*
 db.json
+Music_Together.spec
+build
+dist

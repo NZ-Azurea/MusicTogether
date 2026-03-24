@@ -9,15 +9,16 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
-    <audio id="audio-player" preload="auto"></audio>
-    
     <div class="app-container">
         <!-- Left Panel: Player controls -->
         <div class="panel player-panel glass">
-            <div class="player-art">
+            <div class="player-art" id="player-art-container">
                 <i class="fas fa-compact-disc record-spin" id="disc-icon"></i>
+                <video id="video-player" class="hidden" autoplay style="position:absolute; width:100%; height:100%; object-fit:contain; background:#000; border-radius:16px;"></video>
+                <img id="player-art-img" src="" class="hidden" alt="Album Art">
+                <button id="fullscreen-btn" class="icon-btn hidden" onclick="toggleFullscreen()" style="position:absolute; bottom:15px; right:15px; background:rgba(0,0,0,0.6); padding:8px 12px; border-radius:8px; z-index:15;"><i class="fas fa-expand"></i></button>
             </div>
-            <div class="player-info">
+            <div class="player-info" id="player-info">
                 <h2 id="now-playing-title">Not Playing</h2>
                 <p id="now-playing-artist">Waiting for track...</p>
             </div>
@@ -49,7 +50,13 @@
         <div class="panel queue-panel glass">
             <div class="queue-header">
                 <h3>Up Next</h3>
-                <button class="text-btn" onclick="openPlaylistsModal()"><i class="fas fa-list-music"></i> Playlists</button>
+                <div style="display:flex; gap:10px; align-items:center;">
+                    <button class="icon-btn" onclick="document.getElementById('downloads-modal').classList.remove('hidden')" title="Active Downloads" style="color:var(--accent); font-size:18px;"><i class="fas fa-download"></i></button>
+                    <button class="icon-btn" onclick="openLobbyModal()" title="Share Lobby" style="color:var(--accent); font-size:18px;"><i class="fas fa-network-wired"></i></button>
+                    <button class="text-btn" onclick="openLibraryModal()"><i class="fas fa-music"></i> Library</button>
+                    <button class="text-btn" onclick="openPlaylistsModal()"><i class="fas fa-list-music"></i> Playlists</button>
+                    <button class="icon-btn" style="color:#cf6679; font-size:16px;" onclick="sendAction('clear_queue')" title="Clear Queue"><i class="fas fa-trash"></i></button>
+                </div>
             </div>
             
             <div class="queue-list" id="queue-list">
@@ -57,8 +64,36 @@
             </div>
             
             <div class="add-music-bar">
-                <input type="text" id="music-url-input" placeholder="Paste YouTube link...">
+                <input type="text" id="music-url-input" placeholder="Paste YouTube link..." onkeypress="if(event.key === 'Enter') addUrl()">
                 <button class="action-btn" onclick="addUrl()"><i class="fas fa-plus"></i> Add</button>
+                <button class="icon-btn" onclick="document.getElementById('dl-settings').classList.toggle('hidden')" title="Download Options" style="font-size:24px;"><i class="fas fa-cog"></i></button>
+            </div>
+            
+            <div id="dl-settings" class="hidden" style="margin-top:15px; padding:20px; background:var(--glass-bg); border:1px solid var(--glass-border); border-radius:16px; font-size:14px; box-shadow:0 8px 32px rgba(0,0,0,0.4); backdrop-filter:blur(10px);">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+                    <span style="font-weight:600; color:var(--text-primary);"><i class="fas fa-layer-group" style="color:var(--accent); margin-right:10px;"></i>Download Full Playlist</span>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="dl-playlist-mode">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+                    <span style="font-weight:600; color:var(--text-primary);"><i class="fas fa-save" style="color:#03dac6; margin-right:10px;"></i>Save to My Playlists</span>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="dl-save-playlist" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+
+                <div style="display:flex; flex-direction:column; gap:8px;">
+                    <span style="font-size:11px; color:var(--text-secondary); text-transform:uppercase; letter-spacing:1px; font-weight:800;">Index Range Limits</span>
+                    <div style="display:flex; gap:10px; align-items:center;">
+                        <input type="number" id="dl-start" value="0" placeholder="0" style="flex:1; padding:10px 15px; background:rgba(0,0,0,0.4); border:1px solid var(--glass-border); border-radius:8px; color:white; outline:none; font-family:'Inter';" min="0">
+                        <span style="color:var(--text-secondary); font-size:12px; font-weight:800;">TO</span>
+                        <input type="number" id="dl-end" value="100" placeholder="100" style="flex:1; padding:10px 15px; background:rgba(0,0,0,0.4); border:1px solid var(--glass-border); border-radius:8px; color:white; outline:none; font-family:'Inter';" min="1">
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -73,6 +108,69 @@
             <div class="playlists-grid" id="playlists-grid">
                 <!-- Playlists injected here -->
             </div>
+        </div>
+    </div>
+    
+    <!-- Active Downloads Modal -->
+    <div id="downloads-modal" class="modal-overlay hidden">
+        <div class="modal-content glass" style="max-width:500px;">
+            <div class="modal-header">
+                <h2><i class="fas fa-satellite-dish" style="color:var(--accent); margin-right:10px;"></i>Active Downloads</h2>
+                <button class="icon-btn" onclick="document.getElementById('downloads-modal').classList.add('hidden')"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="queue-list" id="downloads-list" style="display:flex; flex-direction:column; padding-right:10px; min-height:100px;">
+                <div style="text-align:center; color:var(--text-secondary); padding:20px;">No active downloads.</div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Lobby Links Modal -->
+    <div id="lobby-modal" class="modal-overlay hidden">
+        <div class="modal-content glass" style="max-width:600px; max-height:85vh; display:flex; flex-direction:column; overflow:hidden;">
+            <div class="modal-header" style="flex-shrink:0;">
+                <h2><i class="fas fa-network-wired" style="color:var(--accent); margin-right:10px;"></i>Share Lobby Links</h2>
+                <button class="icon-btn" onclick="document.getElementById('lobby-modal').classList.add('hidden')"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="no-scrollbar" style="padding:15px; color:var(--text-secondary); line-height:1.6; overflow-y:auto; flex:1; min-height:0;">
+                <p style="margin-top:0; margin-bottom:15px; font-size:14px;">Send these to friends to join your session from any browser.</p>
+                <div id="lobby-links-container" style="display:flex; flex-direction:column; gap:12px;">
+                    <!-- JS Injects these fields dynamically -->
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Music Library Modal -->
+    <div id="library-modal" class="modal-overlay hidden">
+        <div class="modal-content glass">
+            <div class="modal-header">
+                <h2>Music Library</h2>
+                <input type="text" id="library-search" placeholder="Search tracks..." onkeyup="filterLibrary()" style="margin:0 20px; flex:1; border-radius:8px; padding:10px 15px; border:1px solid #333; background:#222; color:white; outline:none;">
+                <button class="icon-btn" onclick="closeLibraryModal()"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="queue-list" id="library-grid" style="display:flex; flex-direction:column; padding-right:10px;">
+                <!-- Tracks injected here as rows -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit Playlist Modal -->
+    <div id="edit-modal" class="modal-overlay hidden">
+        <div class="modal-content glass">
+            <div class="modal-header">
+                <h2 id="edit-modal-title">Edit Playlist</h2>
+                <button class="icon-btn" onclick="closeEditModal()"><i class="fas fa-arrow-left"></i></button>
+            </div>
+            
+            <div style="display:flex; gap:10px; margin-bottom: 20px;">
+                <input type="text" id="edit-add-search" placeholder="Search library to add..." onkeyup="filterAddEditList()" style="flex:1; border-radius:8px; padding:10px 15px; border:1px solid #333; background:#222; color:white; outline:none;">
+            </div>
+            
+            <!-- List of addable tracks -->
+            <div id="add-edit-list" style="display:none; overflow-y:auto; margin-bottom:20px; border-bottom:1px solid var(--glass-border); padding-bottom:10px;"></div>
+            
+            <h3 style="margin-top:0;">Tracks in Playlist:</h3>
+            <div class="queue-list" id="edit-list" style="display:flex; flex-direction:column;"></div>
         </div>
     </div>
     

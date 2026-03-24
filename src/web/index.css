@@ -31,12 +31,24 @@ body {
 }
 
 .glass {
-    background: var(--glass-bg);
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
+    position: relative;
     border: 1px solid var(--glass-border);
     border-radius: 24px;
     box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+    z-index: 1;
+}
+
+.glass::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background: var(--glass-bg);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border-radius: inherit;
+    clip-path: inset(0 round 24px);
+    transform: translateZ(0); /* Hardware accelerate to clamp chromium rendering borders */
 }
 
 .panel {
@@ -49,11 +61,13 @@ body {
     flex: 1.2;
     align-items: center;
     justify-content: center;
+    min-width: 0; /* CRITICAL FIX: allow flex item to shrink below content size */
 }
 
 .queue-panel {
     flex: 1;
     overflow: hidden;
+    min-width: 0;
 }
 
 /* PLAYER STYLES */
@@ -68,15 +82,43 @@ body {
     box-shadow: 0 10px 30px rgba(0,0,0,0.5);
     margin-bottom: 30px;
     border: 4px solid var(--glass-border);
+    position: relative;
+    overflow: hidden;
+    transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.record-spin {font-size: 100px; color: #555;}
-.spinning { animation: spin 4s linear infinite; color: var(--accent); }
+.player-art.video-mode {
+    width: 100%;
+    max-width: 450px; /* Force an extremely reasonable and conservative video size */
+    max-height: 35vh; /* Clip exceptionally tall cinematic ratios natively without stretching */
+    height: auto;
+    aspect-ratio: 16 / 9;
+    border-radius: 16px;
+    border: 1px solid var(--glass-border);
+    box-shadow: 0 16px 40px rgba(0,0,0,0.6);
+}
+
+#player-art-img {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: opacity 0.5s;
+}
+#player-art-img.hidden { opacity: 0; pointer-events: none; }
+#disc-icon.hidden { display: none !important; }
+
+.record-spin {font-size: 100px; color: #555; animation: spin 4s linear infinite;}
+.spinning { animation: none; } /* Neutralize aggressive spinning */
+.player-art.spinning { animation: none; box-shadow: 0 0 15px rgba(187, 134, 252, 0.3); } /* Lowered radius to stop flickering overflow onto right panel glass blur */
+.player-art.video-mode.spinning { box-shadow: 0 16px 40px rgba(0,0,0,0.6); } /* Explicitly KILL chromium GPU tearing against adjacent backdrop-filters by removing purple glow from video players! */
 @keyframes spin { 100% { transform: rotate(360deg); } }
 
-.player-info { text-align: center; margin-bottom: 25px; width: 100%; }
-.player-info h2 { font-size: 28px; font-weight: 800; margin: 0 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
-.player-info p { font-size: 16px; color: var(--text-secondary); margin: 0; }
+.player-info { text-align: center; margin-bottom: 25px; width: 100%; min-width: 0; padding: 0 15px; box-sizing: border-box; transition: opacity 0.3s; overflow: hidden; }
+.player-info.fade-out { opacity: 0; }
+.player-info.fade-in { opacity: 1; }
+.player-info h2 { font-size: 28px; font-weight: 800; margin: 0 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 100%; }
+.player-info p { font-size: 16px; color: var(--text-secondary); margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 100%; }
 
 .progress-container { width: 100%; display: flex; align-items: center; gap: 15px; margin-bottom: 30px; }
 .progress-container span { font-size: 13px; color: var(--text-secondary); width: 40px; text-align: center;}
@@ -106,10 +148,36 @@ input[type=range]::-webkit-slider-thumb:hover { transform: scale(1.3); }
 .queue-list::-webkit-scrollbar { width: 6px; }
 .queue-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 3px; }
 
-.queue-item { display:flex; align-items:center; padding: 12px 15px; border-radius: 12px; background: rgba(0,0,0,0.2); transition: 0.2s; }
+.queue-item { display:flex; align-items:center; padding: 12px 15px; border-radius: 12px; background: rgba(0,0,0,0.2); transition: all 0.3s ease; position: relative;}
 .queue-item:hover { background: rgba(255,255,255,0.05); cursor: pointer;}
+.queue-item.slide-out { transform: translateX(100%); opacity: 0; }
+
+.playing-item {
+    background: linear-gradient(90deg, rgba(187, 134, 252, 0.2) 0%, rgba(187, 134, 252, 0) 100%) !important;
+    border-left: 4px solid var(--accent);
+}
+.playing-item .t-name, .playing-item .track-index {
+    color: var(--accent) !important;
+    font-weight: 700 !important;
+}
+
 .queue-item .track-index { width: 30px; color: var(--text-secondary); font-weight:600;}
-.queue-item span.t-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 15px;}
+.queue-item span.t-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 15px; padding-right: 30px;}
+
+.remove-btn {
+    position: absolute;
+    right: 15px;
+    color: #cf6679;
+    background: none;
+    border: none;
+    font-size: 18px;
+    cursor: pointer;
+    opacity: 0;
+    transition: 0.2s;
+    outline: none;
+}
+.queue-item:hover .remove-btn { opacity: 1; }
+.remove-btn:hover { transform: scale(1.2); }
 
 .add-music-bar { display: flex; margin-top: 20px; gap: 10px; }
 .add-music-bar input { flex: 1; background: rgba(0,0,0,0.3); border: 1px solid var(--glass-border); border-radius: 12px; padding: 12px 15px; color: white; outline: none; transition: 0.2s; font-size:15px;}
@@ -124,11 +192,13 @@ input[type=range]::-webkit-slider-thumb:hover { transform: scale(1.3); }
 .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid var(--glass-border); padding-bottom: 15px;}
 .modal-header h2 { margin: 0; }
 .playlists-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 20px; overflow-y: auto; padding: 10px; }
-.playlist-card { background: rgba(0,0,0,0.4); border-radius: 16px; padding: 20px; text-align: center; cursor: pointer; transition: 0.2s; border: 1px solid transparent; }
+.playlist-card { background: rgba(0,0,0,0.4); border-radius: 16px; padding: 20px; text-align: center; cursor: pointer; transition: 0.2s; border: 1px solid transparent; position: relative;}
 .playlist-card:hover { transform: translateY(-5px); border-color: var(--accent); background: rgba(255,255,255,0.05); }
 .playlist-card i { font-size: 40px; color: var(--accent); margin-bottom: 15px; }
 .playlist-card h4 { margin: 0 0 5px; font-size: 16px; }
 .playlist-card p { margin: 0; color: var(--text-secondary); font-size: 12px; }
+.edit-playlist-btn { position: absolute; top: 10px; right: 10px; background: none; border: none; color: #aaa; cursor: pointer; transition: 0.2s; }
+.edit-playlist-btn:hover { color: #fff; transform: scale(1.1); }
 
 /* TOAST */
 #toast-container { position: fixed; bottom: 30px; right: 30px; display: flex; flex-direction: column; gap: 10px; z-index: 200; }
@@ -140,3 +210,15 @@ input[type=range]::-webkit-slider-thumb:hover { transform: scale(1.3); }
 .toast-out { animation: slideOut 0.3s ease-in forwards !important; }
 @keyframes slideOut { to { transform: translateX(100%); opacity: 0; } }
 .on { color: var(--accent) !important; text-shadow: 0 0 10px var(--accent); }
+
+/* Custom Toggles */
+.toggle-switch { position: relative; display: inline-block; width: 44px; height: 24px; }
+.toggle-switch input { opacity: 0; width: 0; height: 0; }
+.toggle-switch .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(255,255,255,0.1); transition: .3s; border-radius: 24px; border: 1px solid var(--glass-border); box-sizing: border-box; }
+.toggle-switch .slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px; background-color: white; transition: .3s; border-radius: 50%; }
+.toggle-switch input:checked + .slider { background-color: var(--accent); border-color: var(--accent); }
+.toggle-switch input:checked + .slider:before { transform: translateX(20px); background-color: #000; }
+
+/* Scrollbar Hider */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }

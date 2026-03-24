@@ -89,7 +89,7 @@ def _download_with_retries_sync(url: str, ydl_opts: dict, attempts: int = 8) -> 
         time.sleep(min(2 ** k, 10) + random.random())
     return False
 
-def download_asset_sync(url: str, title: str, entry_name: str) -> bool:
+def download_asset_sync(url: str, title: str, entry_name: str, progress_callback=None) -> bool:
     os.makedirs("music", exist_ok=True)
 
     # unique TEMP dir per download (does not affect final filename)
@@ -106,12 +106,25 @@ def download_asset_sync(url: str, title: str, entry_name: str) -> bool:
         if not candidates:
             return False
 
+        def yt_dlp_progress_hook(d):
+            if d['status'] == 'downloading':
+                try:
+                    pct = d.get('_percent_str', '').strip()
+                    import re
+                    pct = re.sub(r'\x1b\[[0-9;]*m', '', pct)
+                    if progress_callback:
+                        progress_callback(entry_name, f"progress:{pct}")
+                except Exception:
+                    pass
+
         base_opts = {
             # final file naming prediction via safe_filename
             "paths": {"temp": tmp_dir},
             "outtmpl": os.path.join("music", f"{safe_filename(entry_name)}.%(ext)s"),
 
             "skip_unavailable_fragments": False,
+            "writethumbnail": False,
+            "progress_hooks": [yt_dlp_progress_hook],
 
             "retries": 15,
             "fragment_retries": 200,
@@ -141,16 +154,27 @@ def download_asset_sync(url: str, title: str, entry_name: str) -> bool:
         # always delete temp workspace (fragments, .temp.* etc.)
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
-async def download_asset(url: str, title: str, entry_name: str) -> bool:
+async def download_asset(url: str, title: str, entry_name: str, progress_callback=None) -> bool:
     # run blocking yt-dlp in a worker thread
-    return await asyncio.to_thread(download_asset_sync, url, title, entry_name)
+    return await asyncio.to_thread(download_asset_sync, url, title, entry_name, progress_callback)
 
-async def download_all(assets: Iterable[tuple[str, str, str]], limit: int = 10) -> list[bool]:
+async def download_all(assets: Iterable[tuple[str, str, str]], limit: int = 10, progress_callback=None) -> list[bool]:
     sem = asyncio.Semaphore(limit)
 
     async def worker(url: str, title: str, entry_name: str) -> bool:
         async with sem:
-            return await download_asset(url, title, entry_name)
+            if progress_callback:
+                progress_callback(entry_name, "start")
+                
+            try:
+                res = await download_asset(url, title, entry_name, progress_callback)
+            except Exception as e:
+                print(f"Asset worker thread crash ({entry_name}): {e}")
+                res = False
+            
+            if progress_callback:
+                progress_callback(entry_name, "done" if res else "error")
+        return res
 
     tasks = [asyncio.create_task(worker(url, title, entry_name)) for url, title, entry_name in assets]
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -163,7 +187,7 @@ async def download_all(assets: Iterable[tuple[str, str, str]], limit: int = 10) 
 
 import glob
 
-def download_music(url,db,playlist_start=0,playlist_end=10,enable_playlist=False,save_playlist=True):
+def download_music(url,db,playlist_start=0,playlist_end=100,enable_playlist=False,save_playlist=True, progress_callback=None):
     # Use extract_flat to avoid fully downloading all metadata for every video sequentially
     ydl_opts = {"noplaylist":not enable_playlist,"playliststart":playlist_start,"playlistend":playlist_end, "extract_flat": True}
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -185,7 +209,7 @@ def download_music(url,db,playlist_start=0,playlist_end=10,enable_playlist=False
             uploader = music_entry.get("uploader") or music_entry.get("channel") or "Unknown"
             music.append(f"{music_entry['title']} - {uploader}")
             
-        if "playlist" not in db:
+        if not db.get("playlist"):
             db["playlist"] = {}
         db["playlist"][info["title"]] = music
         save_db(db)
@@ -205,7 +229,7 @@ def download_music(url,db,playlist_start=0,playlist_end=10,enable_playlist=False
     failed_or_missing = []
     if download_list:
         results = asyncio.run(download_all(
-            download_list, limit=20
+            download_list, limit=20, progress_callback=progress_callback
         ))
         saved = 0
         
@@ -293,9 +317,9 @@ def add_music_to_playlist(db,playlist_name,music):
         db["playlist"][playlist_name] = music if isinstance(music, list) else [music]
     save_db(db)
 
-URL = "https://music.youtube.com/watch?v=5FHMUKeT1HQ&list=RDAMVM5FHMUKeT1HQ"
+# URL = "https://music.youtube.com/watch?v=5FHMUKeT1HQ&list=RDAMVM5FHMUKeT1HQ"
 
-db = load_db()
+# db = load_db()
 
-download_music(URL,db,playlist_start=0,playlist_end=25,enable_playlist=True,save_playlist=True)
-add_music_to_playlist(db,"music",["test","test"])
+# download_music(URL,db,playlist_start=0,playlist_end=25,enable_playlist=True,save_playlist=True)
+# add_music_to_playlist(db,"music",["test","test"])

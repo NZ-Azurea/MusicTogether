@@ -1,5 +1,10 @@
 import os
 import sys
+
+# Fix SSL issue with given environment from Antigravity
+if "SSLKEYLOGFILE" in os.environ:
+    del os.environ["SSLKEYLOGFILE"]
+
 import threading
 import time
 import webview
@@ -80,7 +85,12 @@ input:focus { border-color: #bb86fc; }
                 return;
             }
             if(!ip.startsWith('http')) ip = 'http://' + ip;
-            window.location.href = ip + "/web/index.html";
+            if(ip.endsWith('/')) ip = ip.slice(0, -1);
+            if(ip.endsWith('/web/index.html')) {
+                window.location.href = ip;
+            } else {
+                window.location.href = ip + "/web/index.html";
+            }
         }
     </script>
 </body>
@@ -94,7 +104,7 @@ def run_server():
     from Music_Together_API import app, print_network_interfaces
     port = 54321
     print_network_interfaces(port)
-    uvicorn.run(app, host="::", port=port, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
 
 class Api:
     def __init__(self):
@@ -109,6 +119,11 @@ class Api:
             time.sleep(2)
         return True
 
+def get_asset_path(relative_path):
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
+
 if __name__ == '__main__':
     api = Api()
     webview.create_window(
@@ -120,4 +135,9 @@ if __name__ == '__main__':
         min_size=(1000, 600),
         background_color='#121212'
     )
-    webview.start()
+    
+    icon_path = get_asset_path(os.path.join("Asset", "logo.ico"))
+    if os.path.exists(icon_path):
+        webview.start(icon=icon_path)
+    else:
+        webview.start()
