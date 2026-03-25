@@ -26,15 +26,21 @@ pyinstaller --name %EXE_NAME% %CONSOLE_FLAG% ^
             --onefile ^
             --icon "Asset/logo.ico" ^
             --add-data "src/web;web" ^
+            --add-data "src/Python_API;Python_API" ^
             --add-data "Asset;Asset" ^
             --paths "src/Python_API" ^
             --hidden-import "Music_Together_API" ^
+            --hidden-import "json_loader" ^
+            --hidden-import "link_handler" ^
             --hidden-import "urllib" ^
             --hidden-import "urllib.request" ^
             --hidden-import "urllib3" ^
+            --hidden-import "miniupnpc" ^
+            --hidden-import "psutil" ^
             --hidden-import "uvicorn" ^
             --hidden-import "fastapi" ^
             --hidden-import "websockets" ^
+            --hidden-import "pydantic" ^
             src/main.py
 
 echo Done! Custom executable generated in the dist/ folder.

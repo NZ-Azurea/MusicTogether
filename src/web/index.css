@@ -148,9 +148,11 @@ input[type=range]::-webkit-slider-thumb:hover { transform: scale(1.3); }
 .queue-list::-webkit-scrollbar { width: 6px; }
 .queue-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 3px; }
 
-.queue-item { display:flex; align-items:center; padding: 12px 15px; border-radius: 12px; background: rgba(0,0,0,0.2); transition: all 0.3s ease; position: relative;}
+.queue-item { display:flex; align-items:center; padding: 12px 15px; border-radius: 12px; background: rgba(0,0,0,0.2); transition: transform 0.22s ease, background 0.3s ease, opacity 0.3s ease, box-shadow 0.22s ease; position: relative; user-select: none;}
 .queue-item:hover { background: rgba(255,255,255,0.05); cursor: pointer;}
 .queue-item.slide-out { transform: translateX(100%); opacity: 0; }
+.queue-item.dragging { opacity: 0.45; transform: scale(0.985); box-shadow: 0 10px 22px rgba(0,0,0,0.35); }
+.queue-item.drag-over { background: rgba(187, 134, 252, 0.16); box-shadow: inset 0 0 0 1px rgba(187, 134, 252, 0.3); }
 
 .playing-item {
     background: linear-gradient(90deg, rgba(187, 134, 252, 0.2) 0%, rgba(187, 134, 252, 0) 100%) !important;

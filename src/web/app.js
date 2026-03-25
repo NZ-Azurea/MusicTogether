@@ -3,11 +3,22 @@ let ws;
 const audio = document.getElementById("video-player"); // Switch mapping to new video element identically!
 const playBtn = document.getElementById("play-pause-btn");
 const discIcon = document.getElementById("disc-icon");
+const sessionUsername = new URLSearchParams(window.location.search).get("username") || "anonymous";
 
 // State
-let globalState = { queue: [], current_index: -1, now_playing: null, is_playing: false, repeat_mode: "none" };
+let globalState = { queue: [], current_index: -1, now_playing: null, is_playing: false, repeat_mode: "none", current_time: 0 };
 let isScrubbing = false;
 let isLoved = false;
+let draggedQueueIndex = null;
+let queueItemKeyCounts = new Map();
+
+function setLoveButtonState(loved) {
+    const btn = document.querySelector(".love-btn i");
+    if (!btn) return;
+    isLoved = loved;
+    btn.className = loved ? "fas fa-heart on" : "far fa-heart";
+    btn.style.color = loved ? "#ff4081" : "";
+}
 
 function connectWebsocket() {
     ws = new WebSocket(wsUrl);
@@ -216,7 +227,9 @@ function updateState(newState) {
             checkLovedState();
         }, 300);
     } else {
-        // Only trigger playback controls manually if the track itself HAS NOT changed!
+        if (!isScrubbing && newState.now_playing && typeof newState.current_time === "number" && Math.abs((audio.currentTime || 0) - newState.current_time) > 0.75) {
+            audio.currentTime = Math.max(0, newState.current_time);
+        }
         if (newState.is_playing) {
             if(audio.src && audio.paused) audio.play().catch(e => console.log("Waiting for user interaction mapping", e));
         } else {
@@ -241,7 +254,7 @@ function updateState(newState) {
 }
 
 function playAudioFile(trackName) {
-    const extensions = ['.webm', '.m4a', '.mp4', '.mp3', '.opus'];
+    const extensions = ['.m4a', '.mp4', '.mp3', '.wav', '.webm', '.opus'];
     let currentIndex = 0;
     
     audio.classList.add("hidden");
@@ -260,6 +273,10 @@ function playAudioFile(trackName) {
             
             const artContainer = document.getElementById("player-art-container");
             const fsBtn = document.getElementById("fullscreen-btn");
+            if (typeof globalState.current_time === "number") {
+                const safeTime = audio.duration ? Math.min(Math.max(0, globalState.current_time), Math.max(0, audio.duration - 0.1)) : Math.max(0, globalState.current_time);
+                audio.currentTime = safeTime;
+            }
             
             if(audio.videoWidth > 0) {
                 audio.classList.remove("hidden");
@@ -311,17 +328,8 @@ async function checkLovedState() {
     try {
         const res = await fetch(`http://${window.location.host}/playlists?t=${Date.now()}`);
         const playlists = await res.json();
-        const loved = playlists["Host_love"] || [];
-        const btn = document.querySelector('.love-btn i');
-        if(loved.includes(globalState.now_playing)) {
-            isLoved = true;
-            btn.className = "fas fa-heart on";
-            btn.style.color = "#ff4081";
-        } else {
-            isLoved = false;
-            btn.className = "far fa-heart";
-            btn.style.color = "";
-        }
+        const loved = playlists[`${sessionUsername}_love`] || [];
+        setLoveButtonState(loved.includes(globalState.now_playing));
     } catch(e){}
 }
 
@@ -364,7 +372,11 @@ const seekBar = document.getElementById("seek-bar");
 seekBar.onmousedown = () => isScrubbing = true;
 seekBar.onmouseup = () => isScrubbing = false;
 seekBar.onchange = (e) => {
-    if(audio.duration) audio.currentTime = (e.target.value / 100) * audio.duration;
+    if(audio.duration) {
+        const seconds = (e.target.value / 100) * audio.duration;
+        audio.currentTime = seconds;
+        sendAction("seek_to", { seconds });
+    }
 };
 
 document.getElementById("volume-slider").oninput = (e) => {
@@ -410,36 +422,98 @@ function addUrl() {
 
 function loveTrack() {
     if(globalState.now_playing) {
-        const action = isLoved ? "remove" : "add";
-        fetch(`http://${window.location.host}/playlists/Host_love/edit`, {
+        const nextLoved = !isLoved;
+        const action = nextLoved ? "add" : "remove";
+        setLoveButtonState(nextLoved);
+        fetch(`http://${window.location.host}/playlists/${encodeURIComponent(sessionUsername)}_love/edit`, {
             method: "POST",
             headers: {"Content-Type":"application/json"},
             body: JSON.stringify({ action: action, music: [globalState.now_playing] })
-        }).then(() => checkLovedState());
-        
-        document.querySelector('.love-btn i').className = "fas fa-heart";
-        setTimeout(() => document.querySelector('.love-btn i').className = "far fa-heart", 1000);
-        showToast(isLoved ? "Removed from Loved Tracks" : "Added to Loved Tracks", "info");
+        }).then(() => checkLovedState()).catch(() => checkLovedState());
+        showToast(nextLoved ? "Added to Loved Tracks" : "Removed from Loved Tracks", "info");
     }
 }
 
 function renderQueue() {
     const list = document.getElementById("queue-list");
+    const previousPositions = new Map();
+    Array.from(list.children).forEach((child) => {
+        if (child.dataset.queueKey) {
+            previousPositions.set(child.dataset.queueKey, child.getBoundingClientRect().top);
+        }
+    });
+
     list.innerHTML = "";
+    queueItemKeyCounts = new Map();
     globalState.queue.forEach((item, index) => {
+        const occurrence = (queueItemKeyCounts.get(item) || 0) + 1;
+        queueItemKeyCounts.set(item, occurrence);
+        const queueKey = `${item}__${occurrence}`;
         const div = document.createElement("div");
-        // Illuminates natively if it is the current track!
         div.className = "queue-item" + (index === globalState.current_index ? " playing-item" : "");
+        div.dataset.queueKey = queueKey;
+        div.dataset.queueIndex = String(index);
+        div.draggable = true;
         div.onclick = (e) => {
+            if (draggedQueueIndex !== null) return;
             if(e.target.closest('.remove-btn')) return;
             sendAction("jump_to_queue", { index });
         };
+        div.addEventListener("dragstart", (event) => {
+            draggedQueueIndex = index;
+            div.classList.add("dragging");
+            if (event.dataTransfer) {
+                event.dataTransfer.effectAllowed = "move";
+                event.dataTransfer.setData("text/plain", String(index));
+            }
+        });
+        div.addEventListener("dragend", () => {
+            draggedQueueIndex = null;
+            div.classList.remove("dragging");
+            document.querySelectorAll(".queue-item.drag-over").forEach((itemElem) => itemElem.classList.remove("drag-over"));
+        });
+        div.addEventListener("dragover", (event) => {
+            event.preventDefault();
+            if (draggedQueueIndex === null || draggedQueueIndex === index) return;
+            document.querySelectorAll(".queue-item.drag-over").forEach((itemElem) => itemElem.classList.remove("drag-over"));
+            div.classList.add("drag-over");
+            if (event.dataTransfer) {
+                event.dataTransfer.dropEffect = "move";
+            }
+        });
+        div.addEventListener("dragleave", () => {
+            div.classList.remove("drag-over");
+        });
+        div.addEventListener("drop", (event) => {
+            event.preventDefault();
+            div.classList.remove("drag-over");
+            const oldIndex = draggedQueueIndex;
+            draggedQueueIndex = null;
+            if (oldIndex === null || oldIndex === index) return;
+            sendAction("reorder_queue", { old_index: oldIndex, new_index: index });
+        });
         div.innerHTML = `
             <span class="track-index">${index + 1}</span>
             <span class="t-name">${item}</span>
             <button class="remove-btn" onclick="removeFromQueue(${index}, this)"><i class="fas fa-times"></i></button>
         `;
         list.appendChild(div);
+    });
+
+    requestAnimationFrame(() => {
+        Array.from(list.children).forEach((child) => {
+            const previousTop = previousPositions.get(child.dataset.queueKey);
+            if (previousTop === undefined) return;
+            const currentTop = child.getBoundingClientRect().top;
+            const delta = previousTop - currentTop;
+            if (Math.abs(delta) < 1) return;
+            child.style.transition = "none";
+            child.style.transform = `translateY(${delta}px)`;
+            requestAnimationFrame(() => {
+                child.style.transition = "transform 220ms ease, background 0.3s ease, opacity 0.3s ease";
+                child.style.transform = "";
+            });
+        });
     });
 }
 
