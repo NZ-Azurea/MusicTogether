@@ -3,7 +3,10 @@ import os
 import random
 import glob
 import time
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
 from typing import List, Dict, Any, Optional, Union
+from urllib.parse import quote, urlparse, parse_qs
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
@@ -19,15 +22,28 @@ from link_handler import (
     is_track_downloaded,
     add_playlist, 
     remove_playlist, 
+    rename_playlist,
     add_music_to_playlist, 
     remove_music_from_playlist, 
     add_music_to_love_playlist,
-    safe_filename
+    safe_filename,
+    ensure_track_metadata_cached,
+    download_resolved_entries,
+    ensure_music_directories,
+    find_existing_asset_path,
 )
 
 app = FastAPI(title="Music Together API")
 
-os.makedirs("music", exist_ok=True)
+ensure_music_directories()
+IMAGE_EXTENSIONS = [".webp", ".jpg", ".jpeg", ".png"]
+MEDIA_EXTENSIONS = [".m4a", ".mp4", ".mp3", ".wav", ".webm", ".opus"]
+VIDEO_EXTENSIONS = {".mp4", ".webm"}
+ASSET_RESOLVER_EXECUTOR = ThreadPoolExecutor(max_workers=max(4, (os.cpu_count() or 4) * 2))
+ASSET_CACHE_TTL_SECONDS = 600
+ASSET_CACHE: Dict[str, dict] = {}
+ASSET_CACHE_LOCK = Lock()
+PENDING_ASSET_WARM: set[str] = set()
 
 
 def _configure_console_encoding():
@@ -42,12 +58,210 @@ def _configure_console_encoding():
     except Exception:
         pass
 
+
+def _configure_windows_asyncio():
+    """Use the selector event loop on Windows for quieter socket shutdown behavior."""
+    if os.name != "nt":
+        return
+    policy_factory = getattr(asyncio, "WindowsSelectorEventLoopPolicy", None)
+    if policy_factory is None:
+        return
+    try:
+        asyncio.set_event_loop_policy(policy_factory())
+    except Exception:
+        pass
+
+
+def _resolve_track_assets(track_name: str) -> dict:
+    """Resolve existing media and preview assets for one track from disk."""
+    def _existing_url(extension: str, asset_kind: str) -> Optional[str]:
+        path = find_existing_asset_path(track_name, extension, asset_kind)
+        if path:
+            return f"/asset/{'thumbnail' if asset_kind == 'thumbnail' else 'media'}?track={quote(track_name)}&ext={quote(extension)}"
+        return None
+
+    media_url = None
+    media_kind = "none"
+    for extension in MEDIA_EXTENSIONS:
+        media_url = _existing_url(extension, "media")
+        if media_url:
+            media_kind = "video" if extension in VIDEO_EXTENSIONS else "audio"
+            break
+
+    preview_url = None
+    preview_kind = "fallback"
+    for extension in IMAGE_EXTENSIONS:
+        preview_url = _existing_url(extension, "thumbnail")
+        if preview_url:
+            preview_kind = "image"
+            break
+
+    if preview_url is None and media_kind == "video":
+        preview_url = media_url
+        preview_kind = "video"
+
+    return {
+        "track": track_name,
+        "media_url": media_url,
+        "media_kind": media_kind,
+        "preview_url": preview_url,
+        "preview_kind": preview_kind,
+        "resolved": True,
+    }
+
+
+def default_track_asset_payload(track_name: str) -> dict:
+    """Return the default asset payload when nothing is cached yet."""
+    return {
+        "track": track_name,
+        "media_url": None,
+        "media_kind": "none",
+        "preview_url": None,
+        "preview_kind": "fallback",
+        "resolved": False,
+    }
+
+
+def _normalize_asset_payload(track_name: str, asset_data: Optional[dict]) -> dict:
+    """Normalize one asset payload so old cache entries keep working."""
+    normalized = default_track_asset_payload(track_name)
+    if asset_data:
+        normalized.update(asset_data)
+    normalized["track"] = track_name
+    if "resolved" not in normalized or normalized["resolved"] is None:
+        normalized["resolved"] = bool(normalized.get("preview_url") or normalized.get("media_url"))
+    return normalized
+
+
+def _get_cached_track_assets(track_name: str) -> Optional[dict]:
+    """Return a recent cached asset lookup when available."""
+    now = time.monotonic()
+    with ASSET_CACHE_LOCK:
+        cached = ASSET_CACHE.get(track_name)
+        if not cached:
+            return None
+        if now - cached.get("cached_at", 0) > ASSET_CACHE_TTL_SECONDS:
+            ASSET_CACHE.pop(track_name, None)
+            return None
+        return _normalize_asset_payload(track_name, cached["data"])
+
+
+def _store_cached_track_assets(track_name: str, asset_data: dict) -> dict:
+    """Store resolved asset info in the in-memory cache."""
+    normalized = _normalize_asset_payload(track_name, asset_data)
+    with ASSET_CACHE_LOCK:
+        ASSET_CACHE[track_name] = {
+            "cached_at": time.monotonic(),
+            "data": dict(normalized),
+        }
+    return normalized
+
+
+def _asset_url_to_path(url: Optional[str]) -> Optional[str]:
+    """Translate an internal asset URL back to a local file path when possible."""
+    if not url:
+        return None
+
+    if url.startswith("/asset/"):
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query)
+        track = params.get("track", [None])[0]
+        extension = params.get("ext", [None])[0]
+        if not track or not extension:
+            return None
+        asset_kind = "thumbnail" if parsed.path.endswith("/thumbnail") else "media"
+        return find_existing_asset_path(track, extension, asset_kind)
+
+    if url.startswith("/music/"):
+        relative_path = url.split("?", 1)[0].lstrip("/").replace("/", os.sep)
+        candidate = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", relative_path))
+        if os.path.exists(candidate):
+            return candidate
+
+    return None
+
+
+def _asset_url_exists(url: Optional[str]) -> bool:
+    """Return True when the referenced local media URL still exists on disk."""
+    return _asset_url_to_path(url) is not None
+
+
+def _is_asset_payload_valid(asset_data: Optional[dict]) -> bool:
+    """Return True when cached asset metadata still points to existing files."""
+    if not asset_data:
+        return False
+    preview_ok = asset_data.get("preview_kind") == "fallback" or _asset_url_exists(asset_data.get("preview_url"))
+    media_ok = asset_data.get("media_kind") == "none" or _asset_url_exists(asset_data.get("media_url"))
+    return preview_ok and media_ok
+
+
+def _load_persisted_asset_cache(db: dict, track_name: str) -> Optional[dict]:
+    """Load one asset record from the DB cache when it is still valid."""
+    asset_data = db.get("media_assets", {}).get(track_name)
+    if not _is_asset_payload_valid(asset_data):
+        return None
+    return _normalize_asset_payload(track_name, asset_data)
+
+
+def _persist_asset_batch(track_names: List[str]) -> dict:
+    """Resolve and persist asset metadata for missing tracks in one worker thread."""
+    db = load_db()
+    db.setdefault("media_assets", {})
+    changed = False
+    resolved = {}
+
+    for track_name in track_names:
+        existing = _load_persisted_asset_cache(db, track_name)
+        if existing is not None:
+            resolved[track_name] = existing
+            continue
+        asset_data = _resolve_track_assets(track_name)
+        db["media_assets"][track_name] = asset_data
+        resolved[track_name] = asset_data
+        _store_cached_track_assets(track_name, asset_data)
+        changed = True
+
+    if changed:
+        save_db(db)
+    return resolved
+
+
+async def _warm_missing_asset_cache(track_names: List[str]):
+    """Warm asset metadata in the background without blocking the request path."""
+    tracks_to_warm = []
+    with ASSET_CACHE_LOCK:
+        for track_name in track_names:
+            if track_name in PENDING_ASSET_WARM:
+                continue
+            PENDING_ASSET_WARM.add(track_name)
+            tracks_to_warm.append(track_name)
+
+    if not tracks_to_warm:
+        return
+
+    try:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(ASSET_RESOLVER_EXECUTOR, _persist_asset_batch, tracks_to_warm)
+    finally:
+        with ASSET_CACHE_LOCK:
+            for track_name in tracks_to_warm:
+                PENDING_ASSET_WARM.discard(track_name)
+
 @app.get("/music/{filename}")
 def get_music_file(filename: str):
     name, ext = os.path.splitext(filename)
     safe_name = safe_filename(name)
     path = os.path.join("music", f"{safe_name}{ext}")
     if os.path.exists(path):
+        return FileResponse(path)
+    raise HTTPException(status_code=404, detail="File not found")
+
+
+@app.get("/asset/{asset_kind}")
+def get_track_asset(asset_kind: str, track: str, ext: str):
+    normalized_kind = "thumbnail" if asset_kind == "thumbnail" else "media"
+    path = find_existing_asset_path(track, ext, normalized_kind)
+    if path and os.path.exists(path):
         return FileResponse(path)
     raise HTTPException(status_code=404, detail="File not found")
 
@@ -254,6 +468,18 @@ async def process_url_download(url: str, enable_playlist: bool = False, save_pla
                 lambda: asyncio.create_task(manager.update_download_progress(entry_name, status))
             )
 
+        async def queue_downloaded_track(entry_name: str):
+            was_empty = (player_state.now_playing is None)
+            player_state.queue.append(entry_name)
+            if was_empty:
+                player_state.start_track(len(player_state.queue) - 1, playing=True, position=0.0)
+            await manager.broadcast_state()
+
+        def on_track_completed(entry_name: str):
+            loop.call_soon_threadsafe(
+                lambda: asyncio.create_task(queue_downloaded_track(entry_name))
+            )
+
         if enable_playlist:
             plan = await run_in_threadpool(
                 resolve_download_entries,
@@ -265,37 +491,15 @@ async def process_url_download(url: str, enable_playlist: bool = False, save_pla
                 save_playlist=save_playlist,
             )
             entries = plan.get("entries", [])
-            added_count = 0
-
-            for entry in entries:
-                entry_name = entry["entry_name"]
-                if is_track_downloaded(entry_name, db):
-                    was_empty = (player_state.now_playing is None)
-                    player_state.queue.append(entry_name)
-                    if was_empty:
-                        player_state.start_track(len(player_state.queue) - 1, playing=True, position=0.0)
-                    await manager.broadcast_state()
-                    added_count += 1
-                    continue
-
-                result = await run_in_threadpool(
-                    download_music,
-                    entry["url"],
-                    db,
-                    0,
-                    100,
-                    False,
-                    False,
-                    on_track_progress,
-                )
-                if result:
-                    added_name = result[0]
-                    was_empty = (player_state.now_playing is None)
-                    player_state.queue.append(added_name)
-                    if was_empty:
-                        player_state.start_track(len(player_state.queue) - 1, playing=True, position=0.0)
-                    await manager.broadcast_state()
-                    added_count += 1
+            resolved_entry_names = await run_in_threadpool(
+                download_resolved_entries,
+                entries,
+                db,
+                url,
+                on_track_progress,
+                on_track_completed,
+            )
+            added_count = len(resolved_entry_names)
 
             if added_count:
                 await manager.send_notification(f"Queued {added_count} tracks in playlist order.", "success")
@@ -595,14 +799,54 @@ class PlaylistModifyRequest(BaseModel):
     music: Union[str, List[str]]
     action: str # "add" or "remove"
 
+
+class PlaylistRenameRequest(BaseModel):
+    new_name: str
+
+
+class TrackAssetRequest(BaseModel):
+    tracks: List[str]
+    mode: str = "preview"
+
 @app.get("/db")
 def get_database():
-    return load_db()
+    db = load_db()
+    ensure_track_metadata_cached(db)
+    return db
 
 @app.get("/playlists")
 def get_playlists():
     db = load_db()
     return db.get("playlist", {})
+
+
+@app.post("/media/assets")
+async def resolve_media_assets(req: TrackAssetRequest):
+    unique_tracks = list(dict.fromkeys(track for track in req.tracks if track))
+    resolved_map = {}
+    missing_tracks = []
+    db = load_db()
+
+    for track in unique_tracks:
+        cached = _get_cached_track_assets(track)
+        if cached is not None:
+            resolved_map[track] = cached
+            continue
+
+        persisted = _load_persisted_asset_cache(db, track)
+        if persisted is not None:
+            resolved_map[track] = _store_cached_track_assets(track, persisted)
+            continue
+
+        missing_tracks.append(track)
+
+    if missing_tracks:
+        loop = asyncio.get_running_loop()
+        resolved = await loop.run_in_executor(ASSET_RESOLVER_EXECUTOR, _persist_asset_batch, missing_tracks)
+        for track in missing_tracks:
+            resolved_map[track] = resolved.get(track) or default_track_asset_payload(track)
+
+    return {track: resolved_map[track] for track in unique_tracks}
 
 @app.post("/playlists")
 def create_playlist(req: PlaylistCreateRequest):
@@ -615,6 +859,12 @@ def delete_playlist(name: str):
     db = load_db()
     remove_playlist(db, name)
     return {"message": "Playlist deleted successfully"}
+
+@app.patch("/playlists/{name}")
+def rename_playlist_route(name: str, req: PlaylistRenameRequest):
+    db = load_db()
+    rename_playlist(db, name, req.new_name)
+    return {"message": "Playlist renamed successfully", "name": req.new_name}
 
 @app.post("/playlists/{name}/edit")
 def edit_playlist(name: str, req: PlaylistModifyRequest):
@@ -682,7 +932,11 @@ def print_network_interfaces(port):
 
 if __name__ == "__main__":
     import uvicorn
+    from json_loader import migrate_legacy_json_to_sqlite
+
+    migrate_legacy_json_to_sqlite()
+    _configure_windows_asyncio()
     _configure_console_encoding()
     port = 54321
     print_network_interfaces(port)
-    uvicorn.run(app, host="::", port=port)
+    uvicorn.run(app, host="::", port=port, access_log=False)

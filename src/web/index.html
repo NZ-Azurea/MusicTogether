@@ -14,7 +14,7 @@
         <div class="panel player-panel glass">
             <div class="player-art" id="player-art-container">
                 <i class="fas fa-compact-disc record-spin" id="disc-icon"></i>
-                <video id="video-player" class="hidden" autoplay style="position:absolute; width:100%; height:100%; object-fit:contain; background:#000; border-radius:16px;"></video>
+                <video id="video-player" class="hidden" autoplay></video>
                 <img id="player-art-img" src="" class="hidden" alt="Album Art">
                 <button id="fullscreen-btn" class="icon-btn hidden" onclick="toggleFullscreen()" style="position:absolute; bottom:15px; right:15px; background:rgba(0,0,0,0.6); padding:8px 12px; border-radius:8px; z-index:15;"><i class="fas fa-expand"></i></button>
             </div>
@@ -103,7 +103,13 @@
         <div class="modal-content glass">
             <div class="modal-header">
                 <h2>Your Playlists</h2>
-                <button class="icon-btn" onclick="closePlaylistsModal()"><i class="fas fa-times"></i></button>
+                <div class="modal-header-actions">
+                    <div class="playlist-create-row">
+                        <input type="text" id="new-playlist-name" placeholder="New playlist name" onkeypress="if(event.key === 'Enter') createPlaylist()">
+                        <button class="action-btn action-btn-inline" onclick="createPlaylist()"><i class="fas fa-plus"></i> Create</button>
+                    </div>
+                    <button class="icon-btn" onclick="closePlaylistsModal()"><i class="fas fa-times"></i></button>
+                </div>
             </div>
             <div class="playlists-grid" id="playlists-grid">
                 <!-- Playlists injected here -->
@@ -145,7 +151,10 @@
         <div class="modal-content glass">
             <div class="modal-header">
                 <h2>Music Library</h2>
-                <input type="text" id="library-search" placeholder="Search tracks..." onkeyup="filterLibrary()" style="margin:0 20px; flex:1; border-radius:8px; padding:10px 15px; border:1px solid #333; background:#222; color:white; outline:none;">
+                <div class="library-filter-row">
+                    <input type="text" id="library-name-search" placeholder="Filter by title..." onkeyup="filterLibrary()">
+                    <input type="text" id="library-artist-search" placeholder="Filter by artist..." onkeyup="filterLibrary()">
+                </div>
                 <button class="icon-btn" onclick="closeLibraryModal()"><i class="fas fa-times"></i></button>
             </div>
             <div class="queue-list" id="library-grid" style="display:flex; flex-direction:column; padding-right:10px;">
@@ -160,6 +169,11 @@
             <div class="modal-header">
                 <h2 id="edit-modal-title">Edit Playlist</h2>
                 <button class="icon-btn" onclick="closeEditModal()"><i class="fas fa-arrow-left"></i></button>
+            </div>
+
+            <div id="edit-rename-row" class="playlist-rename-row">
+                <input type="text" id="edit-playlist-name" placeholder="Playlist name" onkeypress="if(event.key === 'Enter') savePlaylistName()">
+                <button class="action-btn action-btn-inline" onclick="savePlaylistName()"><i class="fas fa-floppy-disk"></i> Save Name</button>
             </div>
             
             <div style="display:flex; gap:10px; margin-bottom: 20px;">

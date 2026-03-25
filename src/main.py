@@ -6,6 +6,8 @@ import time
 import atexit
 import signal
 import threading
+import ctypes
+import asyncio
 from urllib.parse import quote
 
 os.environ.setdefault("PYTHONUTF8", "1")
@@ -21,7 +23,7 @@ HTML_LOADER_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-<title>Music Together Launcher</title>
+<title>Music Together</title>
 <style>
 body {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -182,10 +184,12 @@ def run_server():
     """Start the FastAPI server used by the desktop launcher."""
     import uvicorn
     from Python_API.Music_Together_API import app, print_network_interfaces
+    from Python_API.json_loader import migrate_legacy_json_to_sqlite
 
+    migrate_legacy_json_to_sqlite()
     port = 54321
     print_network_interfaces(port)
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info", access_log=False)
 
 
 class Api:
@@ -392,14 +396,50 @@ def get_asset_path(relative_path):
     return os.path.join(os.path.abspath("."), relative_path)
 
 
+def apply_windows_branding():
+    """Set a stable Windows app identity so taskbar/system surfaces use Music Together branding."""
+    if os.name != "nt":
+        return
+
+    try:
+        app_id = "MusicTogether.Desktop"
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
+    except Exception:
+        pass
+
+
+def configure_windows_asyncio():
+    """Use the selector loop on Windows to avoid noisy Proactor shutdown traces."""
+    if os.name != "nt":
+        return
+    policy_factory = getattr(asyncio, "WindowsSelectorEventLoopPolicy", None)
+    if policy_factory is None:
+        return
+    try:
+        asyncio.set_event_loop_policy(policy_factory())
+    except Exception:
+        pass
+
+    try:
+        ctypes.windll.kernel32.SetConsoleTitleW("Music Together")
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
     if "--server" in sys.argv:
+        configure_windows_asyncio()
         run_server()
         raise SystemExit(0)
 
+    from Python_API.json_loader import migrate_legacy_json_to_sqlite
+
+    migrate_legacy_json_to_sqlite()
+    configure_windows_asyncio()
+    apply_windows_branding()
     api = Api()
     window = webview.create_window(
-        "Music Together Launcher",
+        "Music Together",
         html=build_launcher_html(),
         js_api=api,
         width=1280,

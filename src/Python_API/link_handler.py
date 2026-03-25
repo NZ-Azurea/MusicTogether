@@ -25,6 +25,75 @@ def _project_root() -> str:
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 
+def _music_root() -> str:
+    """Return the root directory used for downloaded assets."""
+    return os.path.join(_project_root(), "music")
+
+
+def _media_dir() -> str:
+    """Return the directory used for playable media files."""
+    return os.path.join(_music_root(), "media")
+
+
+def _thumbnail_dir() -> str:
+    """Return the directory used for downloaded thumbnails."""
+    return os.path.join(_music_root(), "thumbnails")
+
+
+def _tmp_root() -> str:
+    """Return the temporary download workspace directory."""
+    return os.path.join(_music_root(), ".tmp")
+
+
+def ensure_music_directories():
+    """Ensure the organized music folder structure exists."""
+    os.makedirs(_music_root(), exist_ok=True)
+    os.makedirs(_media_dir(), exist_ok=True)
+    os.makedirs(_thumbnail_dir(), exist_ok=True)
+    os.makedirs(_tmp_root(), exist_ok=True)
+
+
+def _asset_search_paths(entry_name: str, extension: str, asset_kind: str = "media") -> list[str]:
+    """Return candidate filesystem paths for a track asset, including legacy locations."""
+    safe_name = safe_filename(entry_name)
+    filename = f"{safe_name}{extension}"
+    if asset_kind == "thumbnail":
+        return [
+            os.path.join(_thumbnail_dir(), filename),
+            os.path.join(_media_dir(), filename),
+            os.path.join(_music_root(), filename),
+        ]
+    return [
+        os.path.join(_media_dir(), filename),
+        os.path.join(_music_root(), filename),
+    ]
+
+
+def find_existing_asset_path(entry_name: str, extension: str, asset_kind: str = "media") -> str | None:
+    """Return the first existing asset path for the given track and extension."""
+    for path in _asset_search_paths(entry_name, extension, asset_kind):
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def _organize_downloaded_assets(entry_name: str):
+    """Move thumbnails into their dedicated folder after download."""
+    safe_name = safe_filename(entry_name)
+    image_exts = (".webp", ".jpg", ".jpeg", ".png")
+    ensure_music_directories()
+
+    for extension in image_exts:
+        source = os.path.join(_media_dir(), f"{safe_name}{extension}")
+        legacy_source = os.path.join(_music_root(), f"{safe_name}{extension}")
+        destination = os.path.join(_thumbnail_dir(), f"{safe_name}{extension}")
+
+        if os.path.exists(source) and source != destination:
+            os.replace(source, destination)
+        elif os.path.exists(legacy_source) and legacy_source != destination:
+            os.replace(legacy_source, destination)
+
+
 def _ensure_env_file() -> str:
     """Create the project .env with downloader defaults when it does not exist."""
     env_path = os.path.join(_project_root(), ".env")
@@ -33,11 +102,32 @@ def _ensure_env_file() -> str:
 
     default_cookie_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "cookies.txt"))
     lines = [
-        "YTDLP_YOUTUBE_CONCURRENCY=5",
-        "YTDLP_GENERIC_CONCURRENCY=6",
-        f"YTDLP_COOKIE_FILE={default_cookie_path}",
+        "# Music Together downloader configuration",
+        "# This file is auto-created on first run. Adjust values as needed.",
+        "",
+        "# Parallel download worker limits",
+        "YTDLP_YOUTUBE_CONCURRENCY=3",
+        "YTDLP_GENERIC_CONCURRENCY=3",
+        "",
+        "# Request pacing",
         "YTDLP_REQUEST_DELAY=1.0",
+        "YTDLP_SLEEP_INTERVAL=1.0",
+        "YTDLP_MAX_SLEEP_INTERVAL=3.0",
+        "",
+        "# Retry and timeout behavior",
+        "YTDLP_SOCKET_TIMEOUT=30",
+        "YTDLP_RETRIES=15",
+        "YTDLP_FRAGMENT_RETRIES=200",
+        "YTDLP_EXTRACTOR_RETRIES=10",
+        "",
+        "# Format selection",
         "YTDLP_MAX_VIDEO_CANDIDATES=12",
+        "YTDLP_HTTP_CHUNK_SIZE=10485760",
+        "YTDLP_CONCURRENT_FRAGMENT_DOWNLOADS=1",
+        "YTDLP_MERGE_OUTPUT_FORMAT=mp4",
+        "",
+        "# Optional cookies source for YouTube auth / anti-bot challenges",
+        f"YTDLP_COOKIE_FILE={default_cookie_path}",
     ]
     with open(env_path, "w", encoding="utf-8", newline="\n") as handle:
         handle.write("\n".join(lines) + "\n")
@@ -119,19 +209,65 @@ def _request_delay() -> float:
     return max(_env_float("YTDLP_REQUEST_DELAY", 1.0), 0.0)
 
 
+def _sleep_interval() -> float:
+    """Return the base sleep interval between download attempts."""
+    return max(_env_float("YTDLP_SLEEP_INTERVAL", 1.0), 0.0)
+
+
+def _max_sleep_interval() -> float:
+    """Return the max randomized sleep interval between download requests."""
+    return max(_env_float("YTDLP_MAX_SLEEP_INTERVAL", 3.0), 0.0)
+
+
+def _socket_timeout() -> int:
+    """Return the configured network timeout in seconds."""
+    return max(_env_int("YTDLP_SOCKET_TIMEOUT", 30), 1)
+
+
+def _retries() -> int:
+    """Return the configured retry count for media downloads."""
+    return max(_env_int("YTDLP_RETRIES", 15), 0)
+
+
+def _fragment_retries() -> int:
+    """Return the configured retry count for segmented media downloads."""
+    return max(_env_int("YTDLP_FRAGMENT_RETRIES", 200), 0)
+
+
+def _extractor_retries() -> int:
+    """Return the configured retry count for extractor failures."""
+    return max(_env_int("YTDLP_EXTRACTOR_RETRIES", 10), 0)
+
+
 def _youtube_parallel_limit() -> int:
     """Return the YouTube download concurrency."""
-    return max(_env_int("YTDLP_YOUTUBE_CONCURRENCY", 5), 1)
+    return max(_env_int("YTDLP_YOUTUBE_CONCURRENCY", 3), 1)
 
 
 def _generic_parallel_limit() -> int:
     """Return the default non-YouTube download concurrency."""
-    return max(_env_int("YTDLP_GENERIC_CONCURRENCY", 6), 1)
+    return max(_env_int("YTDLP_GENERIC_CONCURRENCY", 3), 1)
 
 
 def _max_video_candidates() -> int:
     """Return the number of ranked yt-dlp format candidates to try."""
     return max(_env_int("YTDLP_MAX_VIDEO_CANDIDATES", 12), 1)
+
+
+def _http_chunk_size() -> int:
+    """Return the chunk size used by yt-dlp HTTP downloads."""
+    return max(_env_int("YTDLP_HTTP_CHUNK_SIZE", 10485760), 0)
+
+
+def _concurrent_fragment_downloads() -> int:
+    """Return the fragment concurrency for compatible media downloads."""
+    return max(_env_int("YTDLP_CONCURRENT_FRAGMENT_DOWNLOADS", 1), 1)
+
+
+def _merge_output_format() -> str:
+    """Return the preferred merged container format."""
+    value = (_load_env_config().get("YTDLP_MERGE_OUTPUT_FORMAT") or "mp4").strip().lower()
+    return value or "mp4"
 
 
 def _is_youtube_url(url: str) -> bool:
@@ -209,6 +345,33 @@ def safe_filename(name: str, max_len: int = 160) -> str:
     """Return a filesystem-safe filename."""
     name = re.sub(r'[\\/:*?"<>|\n\r\t]+', "_", name).strip()
     return name[:max_len] if len(name) > max_len else name
+
+
+def parse_track_metadata(track_name: str) -> dict:
+    """Split a stored track label into title and artist."""
+    raw_name = (track_name or "").strip()
+    title = raw_name
+    artist = "Unknown"
+    if " - " in raw_name:
+        title, artist = raw_name.rsplit(" - ", 1)
+    return {
+        "track": raw_name,
+        "title": title.strip() or raw_name,
+        "artist": artist.strip() or "Unknown",
+    }
+
+
+def ensure_track_metadata_cached(db: dict, tracks=None) -> dict:
+    """Cache parsed track metadata to avoid recomputing on every library filter."""
+    db.setdefault("track_metadata", {})
+    changed = False
+    for track_name in tracks or db.get("music", []):
+        if track_name not in db["track_metadata"]:
+            db["track_metadata"][track_name] = parse_track_metadata(track_name)
+            changed = True
+    if changed:
+        save_db(db)
+    return db["track_metadata"]
 
 
 def _rank_format(f: dict) -> tuple:
@@ -321,18 +484,27 @@ def _build_candidates(info: dict, max_candidates: int = 12) -> list[str]:
 def _find_downloaded_files(entry_name: str) -> list[str]:
     """Return files created for the given entry name."""
     escaped_name = glob.escape(safe_filename(entry_name))
-    pattern = os.path.join("music", f"{escaped_name}.*")
-    return [
-        path for path in glob.glob(pattern)
-        if os.path.isfile(path) and not path.endswith((".part", ".ytdl"))
+    patterns = [
+        os.path.join(_media_dir(), f"{escaped_name}.*"),
+        os.path.join(_thumbnail_dir(), f"{escaped_name}.*"),
+        os.path.join(_music_root(), f"{escaped_name}.*"),
     ]
+    files = []
+    for pattern in patterns:
+        files.extend(
+            path for path in glob.glob(pattern)
+            if os.path.isfile(path) and not path.endswith((".part", ".ytdl"))
+        )
+    return list(dict.fromkeys(files))
 
 
 def _iter_media_entries(info: dict, enable_playlist: bool) -> list[dict]:
     """Return a normalized ordered list of one or more media entries."""
     if enable_playlist:
         entries = info.get("entries") or []
-        return [entry for entry in entries if isinstance(entry, dict)]
+        normalized_entries = [entry for entry in entries if isinstance(entry, dict)]
+        if normalized_entries:
+            return normalized_entries
     return [info]
 
 
@@ -366,9 +538,8 @@ def _download_with_retries_sync(url: str, ydl_opts: dict, attempts: int = 8) -> 
 
 def download_asset_sync(url: str, title: str, entry_name: str, progress_callback=None) -> bool:
     """Download one asset synchronously using a temporary workspace."""
-    os.makedirs("music", exist_ok=True)
-    tmp_root = os.path.join("music", ".tmp")
-    os.makedirs(tmp_root, exist_ok=True)
+    ensure_music_directories()
+    tmp_root = _tmp_root()
     tmp_dir = os.path.join(tmp_root, f"job_{random.randrange(1 << 32):08x}")
     os.makedirs(tmp_dir, exist_ok=True)
 
@@ -377,7 +548,7 @@ def download_asset_sync(url: str, title: str, entry_name: str, progress_callback
             "quiet": True,
             "no_warnings": True,
             "extractor_retries": 3,
-            "socket_timeout": 30,
+            "socket_timeout": _socket_timeout(),
             "sleep_interval_requests": _request_delay(),
         })
 
@@ -397,31 +568,32 @@ def download_asset_sync(url: str, title: str, entry_name: str, progress_callback
 
         base_opts = {
             "paths": {"temp": tmp_dir},
-            "outtmpl": os.path.join("music", f"{safe_filename(entry_name)}.%(ext)s"),
+            "outtmpl": os.path.join(_media_dir(), f"{safe_filename(entry_name)}.%(ext)s"),
             "skip_unavailable_fragments": False,
-            "writethumbnail": False,
+            "writethumbnail": True,
             "progress_hooks": [yt_dlp_progress_hook],
-            "retries": 15,
-            "fragment_retries": 200,
-            "extractor_retries": 10,
-            "socket_timeout": 30,
-            "merge_output_format": "mp4",
+            "retries": _retries(),
+            "fragment_retries": _fragment_retries(),
+            "extractor_retries": _extractor_retries(),
+            "socket_timeout": _socket_timeout(),
+            "merge_output_format": _merge_output_format(),
             "format_sort_force": True,
             "quiet": True,
             "no_warnings": True,
             "sleep_interval_requests": _request_delay(),
-            "sleep_interval": _request_delay(),
-            "max_sleep_interval": 3.0,
+            "sleep_interval": _sleep_interval(),
+            "max_sleep_interval": _max_sleep_interval(),
             "nopart": True,
             "continuedl": False,
-            "concurrent_fragment_downloads": 1,
-            "http_chunk_size": 10485760,
+            "concurrent_fragment_downloads": _concurrent_fragment_downloads(),
+            "http_chunk_size": _http_chunk_size(),
         }
 
         for fmt in candidates:
             ydl_opts = dict(base_opts)
             ydl_opts["format"] = fmt
             if _download_with_retries_sync(url, ydl_opts, attempts=4):
+                _organize_downloaded_assets(entry_name)
                 return True
 
         return False
@@ -434,7 +606,7 @@ async def download_asset(url: str, title: str, entry_name: str, progress_callbac
     return await asyncio.to_thread(download_asset_sync, url, title, entry_name, progress_callback)
 
 
-async def download_all(assets: Iterable[tuple[str, str, str]], limit: int = 10, progress_callback=None) -> list[bool]:
+async def download_all(assets: Iterable[tuple[str, str, str]], limit: int = 10, progress_callback=None, completed_callback=None) -> list[bool]:
     """Download assets concurrently up to the provided limit."""
     sem = asyncio.Semaphore(limit)
 
@@ -447,6 +619,8 @@ async def download_all(assets: Iterable[tuple[str, str, str]], limit: int = 10, 
             except Exception as exc:
                 print(f"Asset worker thread crash ({entry_name}): {exc}")
                 res = False
+            if res and completed_callback:
+                completed_callback(entry_name)
             if progress_callback:
                 progress_callback(entry_name, "done" if res else "error")
             return res
@@ -469,8 +643,8 @@ def download_music(url,db,playlist_start=0,playlist_end=100,enable_playlist=Fals
         "extract_flat": enable_playlist,
         "quiet": True,
         "no_warnings": True,
-        "extractor_retries": 3,
-        "socket_timeout": 30,
+        "extractor_retries": _extractor_retries(),
+        "socket_timeout": _socket_timeout(),
         "sleep_interval_requests": _request_delay(),
     }
 
@@ -518,6 +692,8 @@ def download_music(url,db,playlist_start=0,playlist_end=100,enable_playlist=Fals
 
             if ok and matches:
                 db["music"].append(entry_name)
+                db.setdefault("track_metadata", {})[entry_name] = parse_track_metadata(entry_name)
+                db.setdefault("media_assets", {}).pop(entry_name, None)
                 saved += 1
             else:
                 print(f"Download failed or file missing on disk: {entry_name}")
@@ -548,6 +724,49 @@ def download_music(url,db,playlist_start=0,playlist_end=100,enable_playlist=Fals
     return valid_entry_names
 
 
+def download_resolved_entries(entries, db, source_url="", progress_callback=None, completed_callback=None):
+    """Download a resolved ordered entry list in parallel and persist successes."""
+    ensure_music_directories()
+    download_list = []
+    ordered_entry_names = []
+
+    for entry in entries or []:
+        entry_name = entry.get("entry_name")
+        entry_url = entry.get("url")
+        title = entry.get("title") or entry_name or "Unknown Title"
+        if not entry_name or not entry_url:
+            continue
+        ordered_entry_names.append(entry_name)
+        if entry_name in db.get("music", []) and is_track_downloaded(entry_name, db):
+            if completed_callback:
+                completed_callback(entry_name)
+        else:
+            download_list.append((entry_url, title, entry_name))
+
+    if download_list:
+        parallel_limit = _youtube_parallel_limit() if _is_youtube_url(source_url) else _generic_parallel_limit()
+        results = asyncio.run(download_all(
+            download_list,
+            limit=parallel_limit,
+            progress_callback=progress_callback,
+            completed_callback=completed_callback,
+        ))
+
+        changed = False
+        for (_, _, entry_name), ok in zip(download_list, results):
+            matches = _find_downloaded_files(entry_name)
+            if ok and matches:
+                if entry_name not in db["music"]:
+                    db["music"].append(entry_name)
+                db.setdefault("track_metadata", {})[entry_name] = parse_track_metadata(entry_name)
+                db.setdefault("media_assets", {}).pop(entry_name, None)
+                changed = True
+        if changed:
+            save_db(db)
+
+    return [entry_name for entry_name in ordered_entry_names if is_track_downloaded(entry_name, db)]
+
+
 def resolve_download_entries(url, db, playlist_start=0, playlist_end=100, enable_playlist=False, save_playlist=True):
     """Resolve playlist metadata into ordered entries without downloading media."""
     ydl_opts = {
@@ -557,8 +776,8 @@ def resolve_download_entries(url, db, playlist_start=0, playlist_end=100, enable
         "extract_flat": enable_playlist,
         "quiet": True,
         "no_warnings": True,
-        "extractor_retries": 3,
-        "socket_timeout": 30,
+        "extractor_retries": _extractor_retries(),
+        "socket_timeout": _socket_timeout(),
         "sleep_interval_requests": _request_delay(),
     }
 
@@ -649,4 +868,29 @@ def add_music_to_playlist(db,playlist_name,music):
                 db["playlist"][playlist_name].append(music)
     else:
         db["playlist"][playlist_name] = music if isinstance(music, list) else [music]
+    save_db(db)
+
+
+def rename_playlist(db, playlist_name, new_name):
+    """Rename a playlist while preserving ordering."""
+    source = (playlist_name or "").strip()
+    target = (new_name or "").strip()
+
+    if not source or not target:
+        raise ValueError("Playlist names cannot be empty")
+
+    if "playlist" not in db:
+        db["playlist"] = {}
+
+    if source not in db["playlist"]:
+        raise KeyError("Playlist not found")
+
+    if source == target:
+        return
+
+    if target in db["playlist"]:
+        raise ValueError("A playlist with this name already exists")
+
+    db["playlist"][target] = list(db["playlist"][source])
+    del db["playlist"][source]
     save_db(db)
