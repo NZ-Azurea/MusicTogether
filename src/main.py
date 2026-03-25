@@ -18,6 +18,9 @@ if API_DIR not in sys.path:
     sys.path.insert(0, API_DIR)
 
 import webview
+from link_handler import ensure_env_file
+
+ensure_env_file()
 
 HTML_LOADER_TEMPLATE = """
 <!DOCTYPE html>

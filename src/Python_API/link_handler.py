@@ -5,6 +5,7 @@ import random
 import asyncio
 import shutil
 import glob
+import sys
 from typing import Iterable
 
 # IDK WHY ANTIGRAVITY DO THIS BUT I FIX IT
@@ -21,7 +22,9 @@ _ENV_CACHE = None
 
 
 def _project_root() -> str:
-    """Return the project root path."""
+    """Return the persistent app root for source runs and bundled builds."""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 
@@ -132,6 +135,11 @@ def _ensure_env_file() -> str:
     with open(env_path, "w", encoding="utf-8", newline="\n") as handle:
         handle.write("\n".join(lines) + "\n")
     return env_path
+
+
+def ensure_env_file() -> str:
+    """Public wrapper so startup can ensure the runtime .env exists."""
+    return _ensure_env_file()
 
 
 def _load_env_config() -> dict:
