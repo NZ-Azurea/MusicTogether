@@ -8,3 +8,10 @@ build
 dist
 cookies.txt
 music_together.sqlite3
+test_lambda_task.py
+test_lambda.py
+test_ws.py
+Music_Together_Debug.spec
+ARCHITECTURE.md
+.env
+.vscode
